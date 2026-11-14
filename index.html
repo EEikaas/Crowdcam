@@ -233,6 +233,15 @@ input.item-name:focus{border-color:var(--amber);background:var(--bg);outline:non
 .icon-btn svg{width:17px;height:17px}
 .icon-btn:hover{background:rgba(255,255,255,.07);color:var(--fg)}
 .icon-btn.armed{background:var(--red);color:#fff}
+.cams{display:flex;gap:10px;flex-wrap:wrap}
+.cam-pick{display:grid;gap:5px;width:156px;padding:4px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel-2);text-align:left;transition:border-color .15s,box-shadow .15s}
+.cam-pick:hover{border-color:var(--faint)}
+.cam-pick video{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:5px;background:#000}
+.cam-pick span{font:600 12.5px/1.2 var(--f-ui);padding:0 3px 2px}
+.cam-pick.on{border-color:var(--amber);box-shadow:0 0 0 2px var(--amber)}
+.cam-pick.on span::after{content:" · valgt";color:var(--amber)}
+.cam-pick.air{border-color:var(--red);box-shadow:0 0 0 2px var(--red)}
+.cam-pick.air span::after{content:" · på skjerm";color:var(--red)}
 .drop{display:flex;align-items:center;justify-content:center;text-align:center;gap:8px;margin-top:10px;border:1.5px dashed var(--line-2);border-radius:10px;padding:14px;color:var(--muted);cursor:pointer;transition:border-color .15s,background .15s}
 .drop b{color:var(--fg)}
 .drop:hover,.drop.over{border-color:var(--amber);background:rgba(255,200,61,.05)}
@@ -282,6 +291,10 @@ body.role-cam{overflow:hidden;background:#000;overscroll-behavior:none}
 .cam-status{position:absolute;top:calc(10px + env(safe-area-inset-top,0px));left:calc(10px + env(safe-area-inset-left,0px));max-width:calc(100% - 90px);background:rgba(12,14,22,.8);z-index:2}
 .cam-tally{position:absolute;bottom:calc(12px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);z-index:2;display:none;background:var(--red);color:#fff;font-family:var(--f-display);font-size:18px;letter-spacing:.1em;text-transform:uppercase;padding:6px 14px;border-radius:6px;box-shadow:0 0 18px rgba(255,46,77,.6)}
 .cam.live .cam-tally{display:block}
+.cam-other{position:absolute;bottom:calc(12px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);z-index:2;display:none;max-width:calc(100% - 24px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background:rgba(12,14,22,.85);color:var(--amber);border:1px solid rgba(255,200,61,.5);font:700 13px/1.2 var(--f-ui);letter-spacing:.04em;padding:7px 12px;border-radius:6px}
+.cam.other .cam-other{display:block}
+.cam.other .cam-step{color:var(--amber)}
 .cam-flip{position:absolute;top:calc(8px + env(safe-area-inset-top,0px));right:10px;z-index:2;width:46px;height:46px;border-radius:50%;background:rgba(12,14,22,.7);border:1px solid rgba(255,255,255,.25);display:grid;place-items:center;padding:0}
 .cam-flip svg{width:22px;height:22px}
 .cam-panel{display:flex;flex-direction:column;gap:10px;min-height:0;background:var(--panel);border-left:1px solid var(--line);
@@ -580,6 +593,7 @@ function startHub() {
           <span class="pv-label" id="pv-label" aria-live="polite">Forhåndsvisning</span>
           <ol class="steps" id="steps"><li data-s="1"><b>1</b>Velg bilde</li><li data-s="2"><b>2</b>Finn person</li><li data-s="3"><b>3</b>Send til skjerm</li><li data-s="4"><b>4</b>Tilbake</li></ol>
         </div>
+        <div class="cams" id="cams" role="group" aria-label="Velg kamera" hidden></div>
         <div class="pv-frame"><div class="pv-box" id="pv-box"></div></div>
         <div class="actions">
           <button class="big send" id="btn-send" type="button"><span class="lbl">Send til skjerm</span><kbd>Mellomrom</kbd></button>
@@ -628,7 +642,7 @@ function startHub() {
       <h3 id="mc-title">Koble til mobilkamera</h3>
       <div class="qr" id="qr"></div>
       <p class="warn-box" id="mc-file" hidden>Appen er åpnet som lokal fil. Skriv inn nettadressen der appen ligger under <b>Innstillinger</b>, så lages QR-koden. Mobilen kan også åpne appen selv og skrive inn koden under.</p>
-      <p>Skann koden med mobilen som skal filme. Eller åpne appen på mobilen, velg <b>Kamera</b> og skriv inn:</p>
+      <p>Skann koden med mobilen som skal filme. Flere mobiler kan bruke samme kode. Du kan også åpne appen på mobilen, velge <b>Kamera</b> og skrive inn:</p>
       <div class="bigcode" id="bigcode"></div>
       <p class="url" id="mc-url"></p>
       <button class="btn" id="mc-close" type="button">Lukk</button>
@@ -638,12 +652,14 @@ function startHub() {
   const el = id => document.getElementById(id);
   const S = {
     items: BUILTINS.slice(), urls: new Map(), thumbs: new Map(),
-    selected: store.get('selected', 'b-kiss'), live: false, dzoom: 1, peekNeutral: false,
+    selected: store.get('selected', 'b-kiss'), live: false, peekNeutral: false,
     settings: Object.assign({}, DEFAULT_SETTINGS, store.get('settings', {})),
     code: store.get('code', '') || newCode(),
     source: store.get('source', 'phone'),
-    stream: null, phoneStream: null, localStream: null,
-    peer: null, peerOk: false, peerMsg: '', conns: new Set(), call: null, retryT: 0,
+    stream: null, localStream: null,
+    // Én oppføring per tilkoblet mobil: { pid, n, camId, conn, call, stream, dzoom, selected }
+    cams: new Map(), activeCam: null, camMemo: new Map(),
+    peer: null, peerOk: false, peerMsg: '', retryT: 0,
     neutralUrl: null, aspect: 16 / 9, screen: null
   };
   store.set('code', S.code);
@@ -654,9 +670,13 @@ function startHub() {
   const pv = new Stage(pvBox);
 
   const currentItem = () => S.items.find(i => i.id === S.selected) || S.items[0];
+  const activeCamObj = () => S.cams.get(S.activeCam) || null;
+  const activeStream = () => { const c = activeCamObj(); return c ? c.stream : null; };
+  const camList = () => [...S.cams.values()].sort((a, b) => a.n - b.n);
   function stageProps(show) {
     const it = currentItem();
-    return { show, item: it, imgUrl: it && S.urls.get(it.id), texts: S.settings, neutralUrl: S.neutralUrl, dzoom: S.source === 'phone' ? S.dzoom : 1 };
+    const c = activeCamObj();
+    return { show, item: it, imgUrl: it && S.urls.get(it.id), texts: S.settings, neutralUrl: S.neutralUrl, dzoom: S.source === 'phone' && c ? c.dzoom : 1 };
   }
   function updateStages() {
     pv.update(stageProps(!S.peekNeutral));
@@ -667,15 +687,49 @@ function startHub() {
     pvBox.classList.toggle('live', S.live);
     const lab = el('pv-label');
     lab.classList.toggle('live', S.live);
-    lab.textContent = S.live ? 'På storskjermen nå' : (S.peekNeutral ? 'Slik ser nøytral skjerm ut' : 'Forhåndsvisning – ikke på skjerm');
+    const ac = activeCamObj();
+    const camTxt = S.source === 'phone' && ac && S.cams.size > 1 ? ` · Kamera ${ac.n}` : '';
+    lab.textContent = (S.live ? 'På storskjermen nå' : (S.peekNeutral ? 'Slik ser nøytral skjerm ut' : 'Forhåndsvisning – ikke på skjerm')) + camTxt;
+    renderCams();
     const send = el('btn-send');
     send.disabled = S.live;
     send.querySelector('.lbl').textContent = S.live ? 'På skjerm' : 'Send til skjerm';
     el('btn-back').classList.toggle('hot', S.live);
     $$('#steps li').forEach(li => li.classList.toggle('on', S.live ? li.dataset.s === '4' : li.dataset.s !== '4'));
     $$('#items .item').forEach(c => { const on = c.dataset.id === S.selected; c.classList.toggle('sel', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); });
-    broadcast(stateMsg());
+    broadcastState();
   }
+
+  /* ---- Kameravelger (vises når flere mobiler er koblet til) ---- */
+  function renderCams() {
+    const box = el('cams');
+    const list = camList();
+    box.hidden = S.source !== 'phone' || list.length < 2;
+    const sig = list.map(c => c.pid + ':' + c.n + ':' + (c.stream ? c.stream.id : '-')).join('|');
+    if (sig !== box.dataset.sig) {
+      box.dataset.sig = sig;
+      box.innerHTML = list.map(c => `<button class="cam-pick" type="button" data-pid="${esc(c.pid)}"><video muted playsinline autoplay></video><span>Kamera ${c.n}${c.stream ? '' : ' (venter)'}</span></button>`).join('');
+      list.forEach((c, i) => {
+        const v = box.children[i].querySelector('video');
+        v.muted = true;
+        if (c.stream) { v.srcObject = c.stream; const p = v.play(); if (p && p.catch) p.catch(() => {}); }
+      });
+    }
+    $$('.cam-pick', box).forEach(b => {
+      const on = b.dataset.pid === S.activeCam;
+      b.classList.toggle('on', on); b.classList.toggle('air', on && S.live);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  el('cams').addEventListener('click', e => { const b = e.target.closest('.cam-pick'); if (b) { setActive(b.dataset.pid); render(); } });
+  function setActive(pid) {
+    const c = S.cams.get(pid);
+    if (!c) return;
+    S.activeCam = pid;
+    if (c.selected && S.items.some(i => i.id === c.selected)) { S.selected = c.selected; store.set('selected', S.selected); }
+    if (S.source === 'phone') applyStream(c.stream);
+  }
+  function rememberCam(c) { if (c.camId) S.camMemo.set(c.camId, { n: c.n, selected: c.selected }); }
 
   /* ---- Bilder ---- */
   function renderItems() {
@@ -694,7 +748,9 @@ function startHub() {
   }
   function select(id) {
     if (!S.items.some(i => i.id === id)) return;
-    S.selected = id; store.set('selected', id); render();
+    S.selected = id; store.set('selected', id);
+    const c = activeCamObj(); if (c) { c.selected = id; rememberCam(c); }
+    render();
   }
   function stepItem(d) {
     const i = S.items.findIndex(x => x.id === S.selected);
@@ -704,7 +760,10 @@ function startHub() {
   function goNeutral() {
     if (!S.live) return;
     S.live = false;
-    if (S.settings.autoNext) { const i = S.items.findIndex(x => x.id === S.selected); S.selected = S.items[(i + 1) % S.items.length].id; store.set('selected', S.selected); }
+    if (S.settings.autoNext) {
+      const i = S.items.findIndex(x => x.id === S.selected); S.selected = S.items[(i + 1) % S.items.length].id; store.set('selected', S.selected);
+      const c = activeCamObj(); if (c) { c.selected = S.selected; rememberCam(c); }
+    }
     render();
   }
   async function saveItem(it) { try { await idb.put({ id: it.id, kind: it.kind, name: it.name, blob: it.blob, order: it.order }); } catch (e) { warnStorage(); } }
@@ -812,9 +871,9 @@ function startHub() {
   function peekBriefly() { if (S.live) { render(); return; } S.peekNeutral = true; render(); clearTimeout(peekT); peekT = setTimeout(() => { S.peekNeutral = false; render(); }, 2500); }
   el('btn-newcode').addEventListener('click', () => {
     S.code = newCode(); store.set('code', S.code); showCode();
-    S.conns.forEach(c => { try { c.close(); } catch (e) {} });
+    S.cams.forEach(c => { try { c.conn && c.conn.close(); } catch (e) {} try { c.call && c.call.close(); } catch (e) {} });
     restartPeer(0);
-    toast('Ny kode laget. Mobilen må koble til på nytt.');
+    toast('Ny kode laget. Mobilene må koble til på nytt.');
   });
   function showCode() { el('code-pill').textContent = S.code; el('code-txt').textContent = S.code; }
   showCode();
@@ -833,7 +892,7 @@ function startHub() {
   async function setSource(src) {
     S.source = src; store.set('source', src);
     if (S.localStream) { S.localStream.getTracks().forEach(t => t.stop()); S.localStream = null; }
-    if (src === 'phone') { applyStream(S.phoneStream); return; }
+    if (src === 'phone') { applyStream(activeStream()); render(); return; }
     try {
       const video = src === 'local-any' ? { width: { ideal: 1920 }, height: { ideal: 1080 } } : { deviceId: { exact: src }, width: { ideal: 1920 }, height: { ideal: 1080 } };
       S.localStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
@@ -859,9 +918,13 @@ function startHub() {
     if (S.source !== 'phone') { cls = S.localStream ? 'ok' : 'err'; txt = S.localStream ? 'Kamera på PC-en er aktivt' : 'Kamera på PC-en er ikke tilgjengelig'; }
     else if (!PeerCtor) { cls = 'err'; txt = 'Tilkoblingsbiblioteket mangler'; }
     else if (!S.peerOk) { cls = S.peerMsg ? 'err' : 'warn'; txt = S.peerMsg || 'Starter tilkobling …'; }
-    else if (S.phoneStream) { cls = 'ok'; txt = 'Mobilen sender video'; }
-    else if (S.conns.size) { cls = 'warn'; txt = 'Mobil tilkoblet – venter på video'; }
-    else { txt = `Venter på mobil (kode ${S.code})`; }
+    else {
+      const sending = camList().filter(x => x.stream).length;
+      if (sending > 1) { cls = 'ok'; txt = `${sending} mobiler sender video`; }
+      else if (sending === 1) { cls = 'ok'; txt = 'Mobilen sender video'; }
+      else if (S.cams.size) { cls = 'warn'; txt = 'Mobil tilkoblet – venter på video'; }
+      else { txt = `Venter på mobil (kode ${S.code})`; }
+    }
     c.className = 'chip ' + cls; c.textContent = txt;
     const sc = el('chip-screen');
     sc.className = 'chip' + (S.screen ? ' ok' : '');
@@ -924,9 +987,22 @@ function startHub() {
     if (!isFinite(a) || a <= 0) return;
     a = clamp(a, 1.2, 2.6);
     if (Math.abs(a - S.aspect) < 0.01) return;
-    S.aspect = a; pvBox.style.setProperty('--ar', a.toFixed(4)); broadcast(stateMsg());
+    S.aspect = a; pvBox.style.setProperty('--ar', a.toFixed(4)); broadcastState();
   }
   setInterval(() => { if (S.screen && S.screen.w.closed) { S.screen = null; updateChips(); } }, 1000);
+  // Mobiler sender et livstegn hvert 2. sekund. Er en mobil stille i 9 sekunder (lukket, mistet nett), fjernes den.
+  setInterval(() => {
+    const now = Date.now();
+    camList().forEach(c => {
+      if (c.conn && c.lastSeen && now - c.lastSeen > 9000) {
+        const { conn, call } = c;
+        c.conn = null; c.call = null; c.stream = null; c.dzoom = 1;
+        try { conn.close(); } catch (e) {}
+        try { call && call.close(); } catch (e) {}
+        camChanged(c);
+      }
+    });
+  }, 2000);
   window.addEventListener('pagehide', () => {
     // La storskjermen stå nøytral hvis kontrollpanelet lukkes eller lastes på nytt.
     if (S.screen && !S.screen.w.closed) { try { S.screen.stage.update(stageProps(false)); S.screen.stage.setStream(null); } catch (e) {} }
@@ -975,24 +1051,73 @@ function startHub() {
   el('modal').addEventListener('click', e => { if (e.target === el('modal')) closeModal(); });
 
   /* ---- Nettverk: mobil -> kontrollpanel ---- */
-  const stateMsg = () => ({
-    t: 'state', selected: S.selected, live: S.live, aspect: S.aspect,
-    items: S.items.map(i => ({ id: i.id, kind: i.kind, name: i.name, builtin: !!i.builtin })),
-    texts: { lookTitle: S.settings.lookTitle, kissText: S.settings.kissText }
-  });
-  function broadcast(m) { S.conns.forEach(c => { if (c.open) { try { c.send(m); } catch (e) {} } }); }
-  function broadcastThumb(id) { const data = S.thumbs.get(id); if (data) broadcast({ t: 'thumb', id, data }); }
-  function onPhoneMsg(conn, d) {
+  // Hver mobil får sin egen tilstand: eget bildevalg, og beskjed om det er dens kamera som er på skjerm.
+  function stateMsg(cam) {
+    const act = activeCamObj();
+    const own = cam && cam.selected && S.items.some(i => i.id === cam.selected) ? cam.selected : S.selected;
+    return {
+      t: 'state', selected: own, live: S.live, aspect: S.aspect,
+      items: S.items.map(i => ({ id: i.id, kind: i.kind, name: i.name, builtin: !!i.builtin })),
+      texts: { lookTitle: S.settings.lookTitle, kissText: S.settings.kissText },
+      you: cam ? cam.n : 0, multi: S.cams.size,
+      onAir: !!(cam && S.live && S.source === 'phone' && S.activeCam === cam.pid),
+      onAirLabel: S.source !== 'phone' ? 'PC-kameraet' : (act ? 'Kamera ' + act.n : 'Et annet kamera')
+    };
+  }
+  function sendTo(cam, m) { if (cam && cam.conn && cam.conn.open) { try { cam.conn.send(m); } catch (e) {} } }
+  function broadcastState() { S.cams.forEach(c => sendTo(c, stateMsg(c))); }
+  function broadcastThumb(id) { const data = S.thumbs.get(id); if (data) S.cams.forEach(c => sendTo(c, { t: 'thumb', id, data })); }
+  function nextCamNumber() { const used = new Set(camList().map(c => c.n)); let n = 1; while (used.has(n)) n++; return n; }
+  function getCam(pid) {
+    let c = S.cams.get(pid);
+    if (!c) { c = { pid, n: nextCamNumber(), camId: null, conn: null, call: null, stream: null, dzoom: 1, selected: null }; S.cams.set(pid, c); }
+    return c;
+  }
+  function camChanged(cam) {
+    if (!cam.conn && !cam.call) S.cams.delete(cam.pid);
+    const act = activeCamObj();
+    if (!act || !act.stream) {
+      // Aktivt kamera forsvant eller mangler video: bytt til et annet som sender, ellers vent.
+      const alt = camList().find(c => c.stream);
+      if (alt) setActive(alt.pid);
+      else if (!act) S.activeCam = null;
+    }
+    if (S.source === 'phone') applyStream(activeStream()); else updateChips();
+    render();
+  }
+  function onPhoneMsg(cam, d) {
     if (!d || typeof d !== 'object') return;
     switch (d.t) {
-      case 'hello':
-        try { conn.send(stateMsg()); S.items.forEach(i => { const data = S.thumbs.get(i.id); if (data) conn.send({ t: 'thumb', id: i.id, data }); }); } catch (e) {}
+      case 'hello': {
+        const memo = d.camId && S.camMemo.get(String(d.camId));
+        cam.camId = d.camId ? String(d.camId).slice(0, 40) : null;
+        if (memo) {
+          if (!camList().some(c => c !== cam && c.n === memo.n)) cam.n = memo.n;
+          if (memo.selected) cam.selected = memo.selected;
+        }
+        if (!cam.selected) cam.selected = S.selected;
+        rememberCam(cam);
+        sendTo(cam, stateMsg(cam));
+        S.items.forEach(i => { const data = S.thumbs.get(i.id); if (data) sendTo(cam, { t: 'thumb', id: i.id, data }); });
+        render();
         break;
-      case 'ping': try { conn.send({ t: 'pong' }); } catch (e) {} break;
-      case 'select': select(String(d.id)); break;
-      case 'send': goLive(); break;
+      }
+      case 'ping': sendTo(cam, { t: 'pong' }); break;
+      case 'select': {
+        const id = String(d.id);
+        if (!S.items.some(i => i.id === id)) break;
+        cam.selected = id; rememberCam(cam);
+        if (S.activeCam === cam.pid || !S.activeCam) { S.selected = id; store.set('selected', id); }
+        render();
+        break;
+      }
+      case 'send':
+        // Den som trykker «Send» kommer på skjermen med sitt eget bildevalg.
+        if (S.source === 'phone' && cam.stream) setActive(cam.pid);
+        S.live = true; S.peekNeutral = false; render();
+        break;
       case 'back': goNeutral(); break;
-      case 'zoom': S.dzoom = clamp(+d.v || 1, 1, 4); updateStages(); break;
+      case 'zoom': cam.dzoom = clamp(+d.v || 1, 1, 4); if (S.activeCam === cam.pid) updateStages(); break;
     }
   }
   function restartPeer(ms) {
@@ -1006,20 +1131,32 @@ function startHub() {
     S.peer = p;
     p.on('open', () => { if (S.peer !== p) return; S.peerOk = true; S.peerMsg = ''; updateChips(); });
     p.on('connection', conn => {
-      conn.on('open', () => { S.conns.add(conn); updateChips(); });
-      conn.on('data', d => onPhoneMsg(conn, d));
-      const gone = () => { S.conns.delete(conn); updateChips(); };
+      conn.on('open', () => {
+        const cam = getCam(conn.peer);
+        if (cam.conn && cam.conn !== conn) { try { cam.conn.close(); } catch (e) {} }
+        cam.conn = conn; cam.lastSeen = Date.now(); updateChips(); render();
+      });
+      conn.on('data', d => { const cam = S.cams.get(conn.peer); if (cam && cam.conn === conn) { cam.lastSeen = Date.now(); onPhoneMsg(cam, d); } });
+      const gone = () => { const cam = S.cams.get(conn.peer); if (cam && cam.conn === conn) { cam.conn = null; camChanged(cam); } };
       conn.on('close', gone); conn.on('error', gone);
     });
     p.on('call', call => {
-      if (S.call && S.call !== call) { try { S.call.close(); } catch (e) {} }
-      S.call = call;
+      // Hver mobil har sin egen videoforbindelse. En ny forbindelse fra samme mobil erstatter den gamle.
+      const cam = getCam(call.peer);
+      if (cam.call && cam.call !== call) { try { cam.call.close(); } catch (e) {} }
+      cam.call = call;
       const gone = () => {
-        if (S.call !== call) return;
-        S.call = null; S.phoneStream = null; S.dzoom = 1;
-        if (S.source === 'phone') applyStream(null); else updateChips();
+        if (cam.call !== call) return;
+        cam.call = null; cam.stream = null; cam.dzoom = 1;
+        camChanged(cam);
       };
-      call.on('stream', s => { if (S.call !== call) return; S.phoneStream = s; if (S.source === 'phone') applyStream(s); else updateChips(); });
+      call.on('stream', s => {
+        if (cam.call !== call) return;
+        cam.stream = s;
+        const act = activeCamObj();
+        if (!act || !act.stream) setActive(cam.pid);
+        camChanged(cam);
+      });
       call.on('close', gone); call.on('error', gone);
       call.answer();
       const pc = call.peerConnection;
@@ -1073,6 +1210,7 @@ function startCamera(code) {
       <div class="cam-box" id="cam-box"></div>
       <div class="cam-status chip warn" id="cam-status" role="status">Kobler til …</div>
       <div class="cam-tally">På skjerm</div>
+      <div class="cam-other" id="cam-other"></div>
       <button class="cam-flip" id="cam-flip" type="button" aria-label="Bytt mellom kameraene foran og bak">${ICON.flip}</button>
     </div>
     <div class="cam-panel">
@@ -1100,7 +1238,9 @@ function startCamera(code) {
 
   const el = id => document.getElementById(id);
   const C = {
-    code, hubId: peerIdFor(code), items: [], thumbs: new Map(), selected: null, live: false,
+    code, hubId: peerIdFor(code), items: [], thumbs: new Map(), selected: null, live: false, onAir: false,
+    you: 0, multi: 0, onAirLabel: '',
+    camId: store.get('camId', '') || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8)),
     texts: { lookTitle: DEFAULT_SETTINGS.lookTitle, kissText: DEFAULT_SETTINGS.kissText }, aspect: 16 / 9,
     stream: null, facing: store.get('facing', 'environment'), zoom: 1, native: false,
     peer: null, conn: null, call: null, linkOk: false, lastPong: 0, dialT: 0, rebuildT: 0, wake: null
@@ -1120,12 +1260,19 @@ function startCamera(code) {
       : '<p class="empty">Bildene fra kontrollpanelet dukker opp her når mobilen er koblet til.</p>';
   }
   function renderUI() {
-    el('cam').classList.toggle('live', C.live);
-    el('cam-box').classList.toggle('live', C.live);
-    el('c-send').disabled = C.live;
-    el('c-send').querySelector('.lbl').textContent = C.live ? 'På skjerm' : 'Send til skjerm';
+    // onAir: mitt kamera er på skjerm. other: skjermen viser et annet kamera.
+    const other = C.live && !C.onAir;
+    el('cam').classList.toggle('live', C.onAir);
+    el('cam').classList.toggle('other', other);
+    el('cam-box').classList.toggle('live', C.onAir);
+    el('cam-other').textContent = other ? `${C.onAirLabel || 'Et annet kamera'} er på skjerm` : '';
+    el('c-send').disabled = C.onAir;
+    el('c-send').querySelector('.lbl').textContent = C.onAir ? 'På skjerm' : (other ? 'Send mitt bilde' : 'Send til skjerm');
     el('c-back').classList.toggle('hot', C.live);
-    el('cam-step').textContent = C.live ? '4 · På skjerm nå – trykk Tilbake når dere er ferdige' : '1 Velg bilde · 2 Finn person · 3 Send';
+    el('cam-step').textContent = C.onAir ? '4 · På skjerm nå – trykk Tilbake når dere er ferdige'
+      : other ? `${C.onAirLabel || 'Et annet kamera'} er på skjerm. Trykk Send for å bytte til ditt bilde.`
+      : '1 Velg bilde · 2 Finn person · 3 Send';
+    if (C.linkOk) status('ok', C.multi > 1 && C.you ? `Kamera ${C.you} · tilkoblet` : 'Tilkoblet');
   }
   el('cam-items').addEventListener('click', e => {
     const b = e.target.closest('.citem'); if (!b) return;
@@ -1135,9 +1282,9 @@ function startCamera(code) {
   });
   el('c-send').addEventListener('click', () => {
     if (!send({ t: 'send' })) { status('err', 'Ikke tilkoblet – ikke sendt'); return; }
-    C.live = true; renderUI(); buzz();
+    C.live = true; C.onAir = true; renderUI(); buzz();
   });
-  el('c-back').addEventListener('click', () => { send({ t: 'back' }); C.live = false; renderUI(); });
+  el('c-back').addEventListener('click', () => { send({ t: 'back' }); C.live = false; C.onAir = false; renderUI(); });
 
   /* ---- Kamera ---- */
   async function openCamera() {
@@ -1262,7 +1409,7 @@ function startCamera(code) {
     conn.on('open', () => {
       if (C.conn !== conn) return;
       C.lastPong = Date.now(); C.linkOk = true; status('ok', 'Tilkoblet');
-      conn.send({ t: 'hello' }); sendZoom();
+      conn.send({ t: 'hello', camId: C.camId }); sendZoom();
     });
     conn.on('data', d => { if (C.conn === conn) onHub(d); });
     conn.on('close', lost); conn.on('error', lost);
@@ -1299,11 +1446,14 @@ function startCamera(code) {
       C.lastPong = Date.now();
       C.items = Array.isArray(d.items) ? d.items : [];
       C.selected = d.selected;
-      const was = C.live; C.live = !!d.live;
+      const was = C.onAir;
+      C.live = !!d.live;
+      C.onAir = d.onAir === undefined ? C.live : !!d.onAir;
+      C.you = +d.you || 0; C.multi = +d.multi || 0; C.onAirLabel = d.onAirLabel || '';
       if (d.texts) C.texts = d.texts;
       if (d.aspect) { C.aspect = d.aspect; el('cam-box').style.setProperty('--ar', (+d.aspect).toFixed(4)); }
       renderItems(); renderUI(); renderStage();
-      if (C.live && !was) buzz();
+      if (C.onAir && !was) buzz();
     }
   }
   setInterval(() => {
@@ -1327,6 +1477,7 @@ function startCamera(code) {
     wakeLock();
     connectPeer();
   });
+  store.set('camId', C.camId);
   renderItems(); renderUI(); renderStage();
   window.__crowdcamCam = C;
 }
@@ -1363,7 +1514,7 @@ function startHome() {
       <ol class="flow">
         <li><b>Velg bilde eller filter</b><span>Look-a-like-bilde ved siden av livebildet, kiss cam-hjerter eller en egen ramme.</span></li>
         <li><b>Finn noen i publikum</b><span>Den som filmer ser nøyaktig hva som kommer på skjermen. Publikum ser fortsatt nøytral skjerm.</span></li>
-        <li><b>Send til skjerm</b><span>Fra mobilen, fra kontrollpanelet eller med en presentasjonsklikker.</span></li>
+        <li><b>Send til skjerm</b><span>Fra mobilen, fra kontrollpanelet eller med en presentasjonsklikker. Filmer flere mobiler, kommer den som trykker «Send» på skjermen.</span></li>
         <li><b>Tilbake</b><span>Skjermen blir nøytral, og dere er klare for neste runde.</span></li>
       </ol>
       <details class="setup">
