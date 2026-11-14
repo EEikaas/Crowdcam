@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0c0e16">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CrowdCam">
 <meta name="description" content="CrowdCam – kiss cam og look-a-like for storskjerm, styrt fra mobilen.">
 <title>CrowdCam</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -233,6 +237,12 @@ input.item-name:focus{border-color:var(--amber);background:var(--bg);outline:non
 .icon-btn svg{width:17px;height:17px}
 .icon-btn:hover{background:rgba(255,255,255,.07);color:var(--fg)}
 .icon-btn.armed{background:var(--red);color:#fff}
+.local-screen{position:fixed;inset:0;z-index:40;background:#07080e}
+.ls-stage{position:absolute;inset:0}
+.local-screen.idle,.local-screen.idle *{cursor:none}
+.ls-bar{position:absolute;top:calc(12px + env(safe-area-inset-top,0px));left:50%;transform:translate(-50%,-8px);z-index:2;display:flex;align-items:center;gap:8px;max-width:calc(100% - 24px);overflow-x:auto;
+  padding:8px 10px 8px 14px;border-radius:10px;background:rgba(20,22,36,.94);border:1px solid rgba(255,255,255,.18);font-weight:600;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+.ls-bar.show{opacity:1;pointer-events:auto;transform:translate(-50%,0)}
 .cams{display:flex;gap:10px;flex-wrap:wrap}
 .cam-pick{display:grid;gap:5px;width:156px;padding:4px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel-2);text-align:left;transition:border-color .15s,box-shadow .15s}
 .cam-pick:hover{border-color:var(--faint)}
@@ -534,6 +544,8 @@ class Stage {
     if (kind === 'overlay') setSrc(e.ovl, p.imgUrl);
     const z = p.dzoom > 1.001 ? `scale(${p.dzoom.toFixed(3)})` : '';
     if (this.video.style.transform !== z) this.video.style.transform = z;
+    // Noen mobilnettlesere setter skjulte videoer på pause. Start avspillingen igjen når bildet skal vises.
+    if (p.show && this.stream && this.video.paused) { const pr = this.video.play(); if (pr && pr.catch) pr.catch(() => {}); }
     this._syncStreamFlag();
   }
 }
@@ -584,6 +596,7 @@ function startHub() {
       <div class="chips"><span class="chip warn" id="chip-cam">Starter …</span><span class="chip" id="chip-screen">Storskjerm ikke åpen</span></div>
       <div class="top-actions">
         <button class="btn" id="btn-connect" type="button">Koble til mobil <span class="code-pill" id="code-pill"></span></button>
+        <button class="btn" id="btn-local" type="button" title="Bruk denne enheten som storskjerm, for eksempel en mobil eller et nettbrett koblet til skjermen">Storskjerm på denne enheten</button>
         <button class="btn primary" id="btn-screen" type="button">Åpne storskjerm</button>
       </div>
     </header>
@@ -647,6 +660,10 @@ function startHub() {
       <p class="url" id="mc-url"></p>
       <button class="btn" id="mc-close" type="button">Lukk</button>
     </div>
+  </div>
+  <div class="local-screen" id="local-screen" hidden>
+    <div class="ls-stage" id="ls-stage"></div>
+    <div class="ls-bar" id="ls-bar"><span>Storskjermvisning</span><button class="btn small" id="ls-qr" type="button">Koble til mobil</button><button class="btn small" id="ls-full" type="button">Fullskjerm</button><button class="btn small primary" id="ls-exit" type="button">Avslutt</button></div>
   </div>`;
 
   const el = id => document.getElementById(id);
@@ -660,7 +677,8 @@ function startHub() {
     // Én oppføring per tilkoblet mobil: { pid, n, camId, conn, call, stream, dzoom, selected }
     cams: new Map(), activeCam: null, camMemo: new Map(),
     peer: null, peerOk: false, peerMsg: '', retryT: 0,
-    neutralUrl: null, aspect: 16 / 9, screen: null
+    neutralUrl: null, aspect: 16 / 9, screen: null,
+    localScreen: false, localStage: null
   };
   store.set('code', S.code);
   const isFile = location.protocol === 'file:';
@@ -681,6 +699,7 @@ function startHub() {
   function updateStages() {
     pv.update(stageProps(!S.peekNeutral));
     if (S.screen) { try { S.screen.stage.update(stageProps(S.live)); } catch (e) { console.warn(e); } }
+    if (S.localScreen && S.localStage) S.localStage.update(stageProps(S.live));
   }
   function render() {
     updateStages();
@@ -908,6 +927,7 @@ function startHub() {
     S.stream = s || null;
     pv.setStream(S.stream);
     if (S.screen) { try { S.screen.stage.setStream(S.stream); } catch (e) {} }
+    if (S.localScreen && S.localStage) S.localStage.setStream(S.stream);
     updateChips(); updateStages();
   }
 
@@ -927,8 +947,8 @@ function startHub() {
     }
     c.className = 'chip ' + cls; c.textContent = txt;
     const sc = el('chip-screen');
-    sc.className = 'chip' + (S.screen ? ' ok' : '');
-    sc.textContent = S.screen ? 'Storskjerm åpen' : 'Storskjerm ikke åpen';
+    sc.className = 'chip' + (S.screen || S.localScreen ? ' ok' : '');
+    sc.textContent = S.localScreen ? 'Storskjerm vises på denne enheten' : S.screen ? 'Storskjerm åpen' : 'Storskjerm ikke åpen';
     el('btn-screen').textContent = S.screen ? 'Vis storskjermvinduet' : 'Åpne storskjerm';
   }
 
@@ -994,20 +1014,74 @@ function startHub() {
   setInterval(() => {
     const now = Date.now();
     camList().forEach(c => {
-      if (c.conn && c.lastSeen && now - c.lastSeen > 9000) {
-        const { conn, call } = c;
-        c.conn = null; c.call = null; c.stream = null; c.dzoom = 1;
-        try { conn.close(); } catch (e) {}
-        try { call && call.close(); } catch (e) {}
-        camChanged(c);
-      }
+      const silent = c.conn && c.lastSeen && now - c.lastSeen > 9000;
+      // Video uten styringsforbindelse i over 12 sekunder er en gammel rest etter at mobilen koblet til på nytt.
+      const orphan = !c.conn && c.call && now - (c.connLostAt || c.createdAt) > 12000;
+      if (silent || orphan) dropCam(c);
     });
   }, 2000);
+  function dropCam(c) {
+    const { conn, call } = c;
+    c.conn = null; c.call = null; c.stream = null; c.dzoom = 1;
+    try { conn && conn.close(); } catch (e) {}
+    try { call && call.close(); } catch (e) {}
+    camChanged(c);
+  }
   window.addEventListener('pagehide', () => {
     // La storskjermen stå nøytral hvis kontrollpanelet lukkes eller lastes på nytt.
     if (S.screen && !S.screen.w.closed) { try { S.screen.stage.update(stageProps(false)); S.screen.stage.setStream(null); } catch (e) {} }
   });
   el('btn-screen').addEventListener('click', openScreen);
+
+  /* ---- Storskjerm på denne enheten (mobil/nettbrett koblet til skjermen, eller PC med én skjerm) ---- */
+  let lsWake = null, lsBarT = 0;
+  function showLocalScreen() {
+    if (!S.localStage) S.localStage = new Stage(el('ls-stage'));
+    el('local-screen').hidden = false;
+    S.localScreen = true;
+    S.localStage.setStream(S.stream);
+    goFull(); lsWakeLock(); flashBar();
+    setAspect(window.innerWidth / window.innerHeight);
+    updateChips(); render();
+  }
+  function hideLocalScreen() {
+    el('local-screen').hidden = true;
+    S.localScreen = false;
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    try { if (lsWake) lsWake.release(); } catch (e) {}
+    lsWake = null;
+    if (S.localStage) S.localStage.setStream(null);
+    if (S.screen && !S.screen.w.closed) setAspect(S.screen.w.innerWidth / S.screen.w.innerHeight); else setAspect(16 / 9);
+    updateChips(); render();
+  }
+  function goFull() {
+    const r = document.documentElement;
+    if (document.fullscreenElement || !r.requestFullscreen) return;
+    r.requestFullscreen({ navigationUI: 'hide' }).then(() => {
+      try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {}); } catch (e) {}
+    }).catch(() => {});
+  }
+  async function lsWakeLock() { try { if ('wakeLock' in navigator && document.visibilityState === 'visible') lsWake = await navigator.wakeLock.request('screen'); } catch (e) {} }
+  document.addEventListener('visibilitychange', () => { if (S.localScreen && document.visibilityState === 'visible') lsWakeLock(); });
+  function flashBar() {
+    const box = el('local-screen');
+    el('ls-bar').classList.add('show'); box.classList.remove('idle');
+    clearTimeout(lsBarT);
+    lsBarT = setTimeout(() => { el('ls-bar').classList.remove('show'); box.classList.add('idle'); }, 3500);
+  }
+  el('local-screen').addEventListener('pointerdown', e => { if (!e.target.closest('#ls-bar')) flashBar(); });
+  el('local-screen').addEventListener('mousemove', flashBar);
+  el('ls-full').addEventListener('click', goFull);
+  el('ls-exit').addEventListener('click', hideLocalScreen);
+  el('ls-qr').addEventListener('click', () => openModal());
+  window.addEventListener('resize', () => { if (S.localScreen) setAspect(window.innerWidth / window.innerHeight); });
+  el('btn-local').addEventListener('click', showLocalScreen);
+  // På mobil og nettbrett åpner popup-vinduer bare en ny fane, så der er storskjerm på samme enhet hovedvalget.
+  if (window.matchMedia && matchMedia('(hover: none) and (pointer: coarse)').matches) {
+    el('btn-screen').hidden = true;
+    el('btn-local').classList.add('primary');
+    el('btn-local').textContent = 'Vis storskjerm her';
+  }
 
   /* ---- Tastatur og knapper ---- */
   function onKey(e) {
@@ -1070,7 +1144,7 @@ function startHub() {
   function nextCamNumber() { const used = new Set(camList().map(c => c.n)); let n = 1; while (used.has(n)) n++; return n; }
   function getCam(pid) {
     let c = S.cams.get(pid);
-    if (!c) { c = { pid, n: nextCamNumber(), camId: null, conn: null, call: null, stream: null, dzoom: 1, selected: null }; S.cams.set(pid, c); }
+    if (!c) { c = { pid, n: nextCamNumber(), camId: null, conn: null, call: null, stream: null, dzoom: 1, selected: null, createdAt: Date.now(), connLostAt: 0, wantsAir: 0 }; S.cams.set(pid, c); }
     return c;
   }
   function camChanged(cam) {
@@ -1089,8 +1163,19 @@ function startHub() {
     if (!d || typeof d !== 'object') return;
     switch (d.t) {
       case 'hello': {
-        const memo = d.camId && S.camMemo.get(String(d.camId));
         cam.camId = d.camId ? String(d.camId).slice(0, 40) : null;
+        // Samme mobil som har koblet til på nytt: fjern den gamle oppføringen, og behold plassen på skjermen.
+        if (cam.camId) camList().forEach(o => {
+          if (o === cam || o.camId !== cam.camId) return;
+          const wasActive = S.activeCam === o.pid;
+          const { conn, call } = o;
+          o.conn = null; o.call = null; o.stream = null;
+          S.cams.delete(o.pid);
+          try { conn && conn.close(); } catch (e) {}
+          try { call && call.close(); } catch (e) {}
+          if (wasActive) { S.activeCam = cam.pid; if (S.source === 'phone') applyStream(cam.stream); }
+        });
+        const memo = cam.camId && S.camMemo.get(cam.camId);
         if (memo) {
           if (!camList().some(c => c !== cam && c.n === memo.n)) cam.n = memo.n;
           if (memo.selected) cam.selected = memo.selected;
@@ -1113,7 +1198,10 @@ function startHub() {
       }
       case 'send':
         // Den som trykker «Send» kommer på skjermen med sitt eget bildevalg.
-        if (S.source === 'phone' && cam.stream) setActive(cam.pid);
+        if (S.source === 'phone') {
+          if (cam.stream) setActive(cam.pid);
+          else cam.wantsAir = Date.now(); // videoen er ikke klar ennå: bytt til denne mobilen så snart den kommer
+        }
         S.live = true; S.peekNeutral = false; render();
         break;
       case 'back': goNeutral(); break;
@@ -1137,7 +1225,7 @@ function startHub() {
         cam.conn = conn; cam.lastSeen = Date.now(); updateChips(); render();
       });
       conn.on('data', d => { const cam = S.cams.get(conn.peer); if (cam && cam.conn === conn) { cam.lastSeen = Date.now(); onPhoneMsg(cam, d); } });
-      const gone = () => { const cam = S.cams.get(conn.peer); if (cam && cam.conn === conn) { cam.conn = null; camChanged(cam); } };
+      const gone = () => { const cam = S.cams.get(conn.peer); if (cam && cam.conn === conn) { cam.conn = null; cam.connLostAt = Date.now(); camChanged(cam); } };
       conn.on('close', gone); conn.on('error', gone);
     });
     p.on('call', call => {
@@ -1154,7 +1242,9 @@ function startHub() {
         if (cam.call !== call) return;
         cam.stream = s;
         const act = activeCamObj();
-        if (!act || !act.stream) setActive(cam.pid);
+        const wanted = cam.wantsAir && Date.now() - cam.wantsAir < 15000 && S.live;
+        cam.wantsAir = 0;
+        if (!act || !act.stream || act === cam || wanted) setActive(cam.pid);
         camChanged(cam);
       });
       call.on('close', gone); call.on('error', gone);
@@ -1280,11 +1370,20 @@ function startCamera(code) {
     $$('.citem', el('cam-items')).forEach(x => { const on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-pressed', on); });
     renderStage();
   });
+  // Sender en kommando. Er forbindelsen nede, kobles det til på nytt og kommandoen sendes når den er tilbake.
+  function command(m) {
+    if (send(m)) return true;
+    C.pending = { m, at: Date.now() };
+    C.linkOk = false;
+    status('warn', 'Kobler til igjen – sendes så snart forbindelsen er tilbake …');
+    redial(0);
+    return false;
+  }
   el('c-send').addEventListener('click', () => {
-    if (!send({ t: 'send' })) { status('err', 'Ikke tilkoblet – ikke sendt'); return; }
+    if (!command({ t: 'send' })) return;
     C.live = true; C.onAir = true; renderUI(); buzz();
   });
-  el('c-back').addEventListener('click', () => { send({ t: 'back' }); C.live = false; C.onAir = false; renderUI(); });
+  el('c-back').addEventListener('click', () => { command({ t: 'back' }); C.live = false; C.onAir = false; renderUI(); });
 
   /* ---- Kamera ---- */
   async function openCamera() {
@@ -1401,7 +1500,7 @@ function startCamera(code) {
     }, ms);
   }
   function dial() {
-    closeLinks(); C.linkOk = false;
+    closeLinks(); C.linkOk = false; C.dialAt = Date.now();
     const p = C.peer;
     const conn = p.connect(C.hubId, { reliable: true });
     C.conn = conn;
@@ -1410,6 +1509,9 @@ function startCamera(code) {
       if (C.conn !== conn) return;
       C.lastPong = Date.now(); C.linkOk = true; status('ok', 'Tilkoblet');
       conn.send({ t: 'hello', camId: C.camId }); sendZoom();
+      // Et trykk på «Send» eller «Tilbake» mens forbindelsen var nede, sendes nå.
+      if (C.pending && Date.now() - C.pending.at < 15000) conn.send(C.pending.m);
+      C.pending = null;
     });
     conn.on('data', d => { if (C.conn === conn) onHub(d); });
     conn.on('close', lost); conn.on('error', lost);
@@ -1457,9 +1559,15 @@ function startCamera(code) {
     }
   }
   setInterval(() => {
-    if (C.conn && C.conn.open) {
-      send({ t: 'ping' });
-      if (C.linkOk && Date.now() - C.lastPong > 8000) { C.linkOk = false; status('warn', 'Får ikke svar fra kontrollpanelet – kobler til igjen …'); redial(0); }
+    if (!C.peer) return;
+    const open = !!(C.conn && C.conn.open);
+    if (open) send({ t: 'ping' });
+    if (C.linkOk && (!open || Date.now() - C.lastPong > 8000)) {
+      // Forbindelsen er død selv om ingen feil ble meldt: koble til på nytt med en gang.
+      C.linkOk = false; status('warn', 'Får ikke svar fra kontrollpanelet – kobler til igjen …'); redial(0);
+    } else if (!C.linkOk && C.conn && !open && C.dialAt && Date.now() - C.dialAt > 12000) {
+      // Tilkoblingsforsøket henger: prøv på nytt.
+      status('warn', 'Tilkoblingen tar lang tid – prøver igjen …'); redial(0);
     }
   }, 2000);
 
